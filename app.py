@@ -79,26 +79,76 @@ def preprocess(img: Image.Image, center_crop: bool) -> np.ndarray:
 
 
 # ---------------- UI ----------------
-st.title("👁️ Glaucoma Detection")
-st.caption("MobileNetV3Large (Model 3, Crop data) • Upload a fundus image")
+def img_tag(path, width="100%"):
+    """Inline base64 image (same approach as the preview, avoids the media endpoint)."""
+    full = os.path.join(BASE, path)
+    if not os.path.exists(full):
+        return ""
+    with open(full, "rb") as fh:
+        enc = base64.b64encode(fh.read()).decode()
+    return f'<img src="data:image/png;base64,{enc}" style="width:{width};border-radius:8px"/>'
 
-with st.sidebar:
-    st.header("Settings")
-    threshold = st.slider("Decision threshold (RG)", 0.05, 0.95, 0.45, 0.05)
-    center_crop = st.checkbox(
-        "Center-crop (square) before prediction",
-        value=False,
-        help="Enable only if the image is not already cropped. "
-             "The model was trained on a cropped dataset.",
+
+def show_performance():
+    st.subheader("Test-set performance (Model 3, cropped images)")
+    st.caption("1,000 test images: 500 RG and 500 NRG. Threshold 0.5.")
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Accuracy", "87.0%")
+    c2.metric("AUC", "0.9496")
+    c3.metric("Loss", "0.3291")
+    c4, c5, c6 = st.columns(3)
+    c4.metric("Precision", "89.7%")
+    c5.metric("Recall (Sensitivity)", "83.6%")
+    c6.metric("Specificity", "90.4%")
+
+    st.markdown("#### Confusion matrix")
+    st.markdown(f'<div style="text-align:center">{img_tag("perf_cm.png", "70%")}</div>',
+                unsafe_allow_html=True)
+    st.caption("TP = 418 glaucoma cases found, FN = 82 missed, "
+               "TN = 452 healthy cleared, FP = 48 false alarms.")
+
+    st.markdown("#### Threshold analysis (all 1,000 test images)")
+    st.markdown(f'<div style="text-align:center">{img_tag("perf_threshold.png", "90%")}</div>',
+                unsafe_allow_html=True)
+    st.markdown(
+        """
+| Threshold | Accuracy | Sensitivity | Specificity | Missed RG | False RG |
+|---|---|---|---|---|---|
+| 0.30 | 86.9% | 90.0% | 83.8% | 50 | 81 |
+| 0.40 | 87.2% | 87.2% | 87.2% | 64 | 64 |
+| **0.45 (app default)** | **87.3%** | **86.2%** | **88.4%** | 69 | 58 |
+| 0.50 | 87.0% | 83.6% | 90.4% | 82 | 48 |
+| 0.60 | 86.9% | 80.0% | 93.8% | 100 | 31 |
+"""
     )
-    st.info(
-        "The model was trained on **cropped fundus images**. "
-        "For best results, upload a similarly cropped image."
+    st.caption("Lowering the threshold catches more glaucoma cases (higher sensitivity) "
+               "but gives more false referrals. 0.45 gave the best balance and best accuracy.")
+
+    st.markdown("#### Training curves (15 epochs, best checkpoint = epoch 13)")
+    a, b = st.columns(2)
+    a.markdown(img_tag("perf_loss.png"), unsafe_allow_html=True)
+    b.markdown(img_tag("perf_acc.png"), unsafe_allow_html=True)
+
+    st.markdown("#### Model comparison (12 experiments, accuracy / AUC)")
+    st.markdown(
+        """
+| Model | Raw | Padded | Cropped |
+|---|---|---|---|
+| Model 1 (layer 193) | 0.883 / 0.9574 | 0.889 / 0.9467 | 0.874 / 0.9521 |
+| Model 2 (layer 127) | 0.873 / 0.9455 | 0.877 / 0.9479 | 0.884 / 0.9593 |
+| **Model 3 (layer 97)** | 0.860 / 0.9480 | 0.873 / 0.9445 | **0.889 / 0.9610** |
+| Model 4 (layer 88) | 0.852 / 0.9445 | 0.848 / 0.9259 | 0.879 / 0.9526 |
+"""
     )
+    st.caption("Model 3 on cropped images gave the best AUC with only 111,521 parameters, "
+               "so it was selected for deployment.")
 
-uploaded = st.file_uploader("Fundus image", type=["jpg", "jpeg", "png"])
 
-if uploaded is not None:
+def show_predictor():
+    uploaded = st.file_uploader("Fundus image", type=["jpg", "jpeg", "png"])
+    if uploaded is None:
+        return
     img_bytes = uploaded.getvalue()
     image = Image.open(io.BytesIO(img_bytes))
     # Display image as an inline base64 data-URI. This bypasses Streamlit's
@@ -142,6 +192,30 @@ if uploaded is not None:
         c1.metric("Confidence", f"{conf * 100:.1f}%")
         c2.metric("P(RG)", f"{prob_rg:.3f}")
         st.progress(min(max(prob_rg, 0.0), 1.0), text="Glaucoma (RG) probability")
+
+
+st.title("👁️ Glaucoma Detection")
+st.caption("MobileNetV3Large (Model 3, Crop data) • Upload a fundus image")
+
+with st.sidebar:
+    st.header("Settings")
+    threshold = st.slider("Decision threshold (RG)", 0.05, 0.95, 0.45, 0.05)
+    center_crop = st.checkbox(
+        "Center-crop (square) before prediction",
+        value=False,
+        help="Enable only if the image is not already cropped. "
+             "The model was trained on a cropped dataset.",
+    )
+    st.info(
+        "The model was trained on **cropped fundus images**. "
+        "For best results, upload a similarly cropped image."
+    )
+
+tab_predict, tab_perf = st.tabs(["🔍 Predict", "📊 Model Performance"])
+with tab_predict:
+    show_predictor()
+with tab_perf:
+    show_performance()
 
 st.divider()
 st.caption(
